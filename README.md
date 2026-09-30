@@ -33,7 +33,7 @@ This is an unofficial tool. It is not made by or affiliated with Anthropic.
 
 ## Install
 
-Needs Python 3.9 or newer.
+Needs Python 3.9 or newer and Playwright 1.48 or newer.
 
 ```bash
 pip install playwright
@@ -73,6 +73,8 @@ python3 artifact2pdf.py report.html -o report.pdf --format Letter --landscape --
 | `--scale` | `1.0` | Render scale, from 0.1 to 2 |
 | `--timeout` | `30` | Seconds to wait for the page, fonts and scripts |
 | `--allow-host` | none | Extra host the page may load from; repeatable |
+| `--local-files` | off | Serve files from the input's folder and subfolders |
+| `--no-sandbox` | off | Run Chromium without its sandbox |
 
 On success it prints the output path and page count. Warnings (blocked
 requests, console errors, content wider than the page) go to stderr.
@@ -84,9 +86,16 @@ timeout, `4` Playwright or Chromium not installed, `1` anything else.
 
 The page may load only from the hosts artifacts are allowed to use: Google
 Fonts, cdnjs, jsDelivr, unpkg, the Tailwind CDN and the jQuery CDN. Other
-requests are blocked and listed on stderr. Add a host with `--allow-host`.
-Relative files next to the input, such as images, are served from the
-input's folder.
+requests, and every WebSocket, are blocked and listed on stderr. Add a host
+with `--allow-host`.
+
+Relative files next to the input, such as images a page references, are not
+served unless you pass `--local-files`. Even then, hidden files and folders
+(names starting with `.`) are never served.
+
+Chromium runs with its sandbox on. If it cannot start, for example as root in
+a container, `--no-sandbox` turns it off; don't combine that with HTML you did
+not write.
 
 ## Security
 

@@ -15,10 +15,12 @@ Fragments are wrapped in the same skeleton claude.ai adds at publish time:
 charset meta, viewport meta with viewport-fit=cover, and a small reset.
 Full documents are rendered as they are.
 
-The page is served from a virtual origin so relative files next to INPUT
-(images, scripts, data) resolve. Network access is limited to the hosts
-artifacts may load from (Google Fonts, cdnjs, jsdelivr, unpkg, Tailwind CDN,
-jQuery CDN); anything else is blocked and reported on stderr.
+The page is served from a virtual origin. Network access is limited to the
+hosts artifacts may load from (Google Fonts, cdnjs, jsdelivr, unpkg, Tailwind
+CDN, jQuery CDN); anything else, including every WebSocket, is blocked and
+reported on stderr. Relative files next to INPUT (images, scripts, data) are
+served only with --local-files, and never hidden files. Chromium runs with its
+sandbox on unless you pass --no-sandbox.
 
 Install:
     pip install playwright
@@ -241,6 +243,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--timeout", type=float, default=30.0, help="seconds to wait for load and fonts (default 30)")
     p.add_argument("--allow-host", action="append", default=[], metavar="HOST",
                    help="extra host the page may load from (repeatable)")
+    p.add_argument("--local-files", action="store_true",
+                   help="let the page load files from INPUT's folder and its subfolders (hidden files excluded)")
+    p.add_argument("--no-sandbox", action="store_true",
+                   help="run Chromium without its sandbox (needed as root in some containers; unsafe for untrusted HTML)")
     return p
 
 
@@ -291,7 +297,13 @@ def main(argv: list[str] | None = None) -> int:
             path = unquote(urlsplit(url).path).lstrip("/")
             if path in ("", "index.html"):
                 return route.fulfill(status=200, content_type="text/html; charset=utf-8", body=html)
+            if not args.local_files:
+                log(f"not serving local file {path} (pass --local-files to allow)")
+                return route.fulfill(status=404, body="")
             target = (root / path).resolve()
+            if any(part.startswith(".") for part in Path(path).parts):
+                log(f"not serving hidden file {path}")
+                return route.fulfill(status=404, body="")
             if target.is_file() and target.is_relative_to(root):
                 ctype = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
                 return route.fulfill(status=200, content_type=ctype, body=target.read_bytes())
@@ -306,7 +318,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         with sync_playwright() as pw:
             try:
-                browser = pw.chromium.launch()
+                browser = pw.chromium.launch(chromium_sandbox=not args.no_sandbox)
             except PlaywrightError as e:
                 die(f"could not launch Chromium; run: playwright install chromium\n{e}", 4)
             context = browser.new_context(
@@ -321,11 +333,18 @@ def main(argv: list[str] | None = None) -> int:
             page.on("console", lambda m: m.type == "error" and not m.text.startswith("Failed to load resource")
                     and log(f"console error: {m.text}"))
             page.on("pageerror", lambda e: log(f"page error: {e}"))
+            # Local 404s and blocked hosts were already logged by handle_route.
             page.on("requestfailed", lambda r: not (r.failure or "").startswith("net::ERR_BLOCKED_BY_CLIENT")
+                    and not r.url.startswith(ORIGIN + "/")
                     and log(f"request failed: {r.url} ({r.failure})"))
             page.on("response", lambda r: r.status >= 400 and not r.url.startswith(ORIGIN + "/")
                     and log(f"HTTP {r.status}: {r.url}"))
             page.route("**/*", handle_route)
+            # page.route only sees HTTP(S); WebSockets need their own route.
+            # A handler that never calls connect_to_server() keeps the socket
+            # inside Playwright, so nothing reaches the network. (Calling
+            # ws.close() here deadlocks the sync API.)
+            page.route_web_socket(re.compile(".*"), lambda ws: log(f"blocked WebSocket to {ws.url}"))
 
             try:
                 page.goto(ORIGIN + "/", wait_until="networkidle", timeout=timeout_ms)

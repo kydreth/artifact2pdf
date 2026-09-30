@@ -36,6 +36,7 @@ It does:
   (`fonts.googleapis.com`, `fonts.gstatic.com`), `cdnjs.cloudflare.com`,
   `cdn.jsdelivr.net`, `unpkg.com`, `cdn.tailwindcss.com` and `code.jquery.com`,
   plus any host you add with `--allow-host`.
+- With `--local-files` only, serve files from the input's folder to the page.
 
 It does not:
 
@@ -54,12 +55,21 @@ Claude authored. It is not hardened for rendering HTML from strangers.
 
 Protections that are in place:
 
+- **Chromium sandbox on.** Chromium is launched with its sandbox enabled
+  (Playwright's default is off). `--no-sandbox` disables it for environments
+  where it cannot start, such as running as root in a container.
 - **HTTP(S) allowlist.** Requests to hosts outside the list are blocked and
   reported on stderr.
+- **WebSockets blocked.** Every WebSocket is intercepted and never connected
+  to its server. The page may see the socket as open, but nothing it sends
+  leaves the machine.
+- **No local files by default.** The page cannot read files from disk unless
+  you pass `--local-files`. With it, files are served only from the input's
+  folder and subfolders, only if their resolved path (after following
+  symlinks) stays inside that folder, and never if any path component starts
+  with `.` (so `.ssh/`, `.env` and similar are refused).
 - **No `file://` access.** The page runs on an `https` virtual origin, so it
   cannot open `file://` URLs.
-- **Path traversal guard.** Relative files are served only if their resolved
-  path, after following symlinks, is inside the input file's folder.
 - **Render timeout.** Loading is bounded by `--timeout` (default 30 seconds).
 
 ## Known limitations
@@ -67,23 +77,17 @@ Protections that are in place:
 These apply to the current version. Keep them in mind before rendering HTML
 you did not write.
 
-1. **Files next to the input are readable by the page.** Any file in the
-   input's folder *or its subfolders* can be fetched by the page with a
-   relative URL and drawn into the PDF. If the input sits in your home folder,
-   that includes files such as `.ssh/` keys or cloud credentials. Put each
-   input in its own folder that holds nothing else.
-2. **WebSockets are not covered by the allowlist.** Playwright's request
-   routing intercepts HTTP(S), not WebSocket connections, so a page may be
-   able to open a WebSocket to any host. Combined with item 1, a malicious
-   page could send local files out while it renders.
-3. **Chromium runs without its sandbox.** Playwright launches Chromium with
-   the sandbox disabled by default. A browser exploit in a malicious page
-   would run with your user's permissions.
-4. **Allowlisted hosts serve arbitrary code.** jsDelivr, unpkg and cdnjs host
+1. **`--local-files` exposes the whole folder tree.** With the flag, the page
+   can read any non-hidden file in the input's folder and its subfolders and
+   draw it into the PDF. Only use it when the input sits in a folder of its
+   own with just the files the page needs.
+2. **`--no-sandbox` removes a layer.** Without the sandbox, a browser exploit
+   in a malicious page would run with your user's permissions.
+3. **Allowlisted hosts serve arbitrary code.** jsDelivr, unpkg and cdnjs host
    any published npm or GitHub package. The allowlist limits where requests
    go; it does not vouch for what a page loads from them. Redirects from an
    allowlisted host are not re-checked against the list.
-5. **DNS lookups can leak.** `<link rel="dns-prefetch">` and similar hints may
+4. **DNS lookups can leak.** `<link rel="dns-prefetch">` and similar hints may
    resolve hostnames outside the allowlist even though the requests
    themselves are blocked.
 
@@ -91,7 +95,8 @@ you did not write.
 
 - Render only HTML you trust. For anything else, run the script inside a
   disposable container or VM with no access to your home folder.
-- Put the input HTML in an empty folder of its own (see limitation 1).
+- Leave `--local-files` off unless the page needs its own images or data,
+  and then keep the input in a folder of its own (see limitation 1).
 - Keep `--allow-host` to the hosts the page actually needs.
 - Check the PDF before sharing it. It contains everything the page rendered,
   including tables inside collapsed `<details>` blocks when you pass
